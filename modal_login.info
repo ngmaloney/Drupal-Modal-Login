@@ -1,0 +1,10 @@
+name = Modal Login Module
+description = Provides modal login instead of the standard drupal login
+version = VERSION
+core = 7.x
+files[] = modal_login.module
+files[] = modal_login.js
+files[] = modal_login.css
+scripts[] = modal_login.js
+stylesheets[all][] = modal_login.css
+

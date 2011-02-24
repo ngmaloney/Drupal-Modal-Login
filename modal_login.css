@@ -1,0 +1,7 @@
+#modal_login {
+  display: hidden;
+}
+
+.region-page-bottom #scf_login {
+  display: none;
+}

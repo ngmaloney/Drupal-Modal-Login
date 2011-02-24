@@ -1,0 +1,241 @@
+<?php
+
+define("MODAL_LOGIN_VAR","modal_login_msg");
+
+/**
+ * Implements hook_theme()
+ */
+function modal_login_login_theme() {
+  return array(
+    'modal_login_login_message' => array('message' => NULL),
+  );
+}
+
+/**
+ * Implements hook_block_info()
+ */
+function modal_login_login_block_info() {
+  $blocks = array();
+  $blocks['modal_login']['info'] = t('Modal Login');
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_block_view()
+ */
+function modal_login_login_block_view($delta = '') {
+  $block = array();
+  if($delta == 'modal_login') {
+    $block['subject'] = t('User Login');
+    $block['content'] = drupal_get_form('modal_login_login_form');
+  }
+  return $block;
+}
+
+/**
+ * Implements preprocess_block()
+ * Adds the $message variable to the $vars array
+ */
+function modal_login_login_preprocess_block(&$vars) {
+  if($vars['block']->module == 'modal_login_login' && $vars['block']->delta == 'modal_login') {
+    $message = modal_login_login_get_message();
+    $vars['message'] = (!empty($message)) ? theme('modal_login_login_message', array('message' => $message)) : NULL;
+  }
+}
+
+/**
+ * Implements hook_form()
+ */
+function modal_login_login_form($form, &$form_state) {
+  global $user;
+
+  $form['#cache'] = FALSE;
+
+  $form['#prefix'] = '<div id="modal_login">';
+  $form['#suffix'] = '</div>';
+
+  //Return an already logged in message if authenticated.
+  if(!empty($user->uid)) {
+    $form['content'] = array(
+      '#type' => 'item',
+      '#markup' => t('You are already logged in.'),
+    );
+    return $form;
+  }
+
+  //Message container (TODO: Add this via somekind of preprocessor)
+  $form['messaging'] = array(
+    '#prefix' => '<div id="login_message_wrapper">',
+    '#suffix' => '</div>',
+  );
+
+
+  $form['login']['#prefix'] = '<div id="modal_login_form">';
+  $form['login']['#suffix'] = '</div>';
+
+  // Display login form:
+  $form['login']['name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('E-mail'),
+    '#size' => 30,
+    '#maxlength' => USERNAME_MAX_LENGTH,
+    '#required' => TRUE,
+    '#weight' => 0,
+  );
+
+  $form['login']['pass'] = array('#type' => 'password',
+    '#title' => t('Password'),
+    '#required' => TRUE,
+    '#weight' => 1,
+    '#size' => 30,
+  );
+  $form['redirect'] = array(
+    '#type' => 'value',
+    '#value' => '/' . $_GET['q'],
+  );
+
+  //Rewrite login links
+  $links = array();
+  /** TODO: Move this to the theme level **/
+  $links[] = l(t('Forgot Password?'), 'user/password', array('attributes' => array('title' => t('Request new password via e-mail.'))));
+  $links[] = l(t('Become a Member'), 'user/register', array('attributes' => array('title' => t('Become a member of our site.'))));
+  $form['login']['links']['#markup'] = theme('item_list', array('items' => $links));
+  $form['login']['links']['#weight'] = 2;
+  $form['redirect'] = array(
+    '#type' => 'value',
+    '#value' => url($_GET['q']),
+  );
+  $form['login']['actions'] = array('#type' => 'actions');
+  $form['login']['actions']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Log in'),
+    '#ajax' => array(
+      'callback' => 'modal_login_login_callback',
+    ),
+    '#weight' => 3,
+  );
+  return $form;
+}
+
+/**
+ * Implements hook_form_validate()
+ * This introduces some hackyness as a way to get messaging from validtion back
+ * to the form. It uses all necessary validation hooks from user module BUT
+ * changes some of the redirecting, etc.
+ */
+function modal_login_login_form_validate($form, &$form_state) {
+  //Run through all the standard USER module validation hooks
+  user_login_name_validate($form, $form_state);
+  user_login_authenticate_validate($form, $form_state);
+  user_login_final_validate($form, $form_state);
+  //Intercept validation messages and rescope.
+  $messages = drupal_get_messages('error');
+  if(!empty($messages['error'])) {
+    modal_login_login_set_message($messages['error']);
+  }
+}
+
+/**
+ * Implements hook_form_submit()
+ */
+function modal_login_login_form_submit($form, &$form_state) {
+  global $user;
+  $user = user_load($form_state['uid']); //This seems to be necessary for auth session
+  user_login_finalize($form_state);
+}
+
+/**
+ * Handles ajax submits for user logins
+*/
+function modal_login_login_callback($form_id, &$form_state) {
+  global $user;
+
+  $commands = array();
+  //dd(form_get_errors());
+  $errors = form_get_errors();
+  if(empty($errors)) {
+    $user = user_load($form_state['uid']);
+    user_login_finalize($form_state);
+    $redirect = $form_state['values']['redirect'];
+    $message = "Login successfull. Please wait while your browser redirects.";
+    $commands[] = ajax_command_html('#modal_login_form', $message);
+    $commands[] = ajax_command_html('#login_message_wrapper', '');
+    $commands[] = ajax_command_invoke('','redirect',array($redirect));//Redirect is a custom jquery hook
+  }
+  else {
+
+    $form = drupal_get_form('modal_login_login_form');
+    $output = render($form);
+    $commands[] = ajax_command_html('#modal_login_form', $output);
+    //Add Validation messages
+    $message = modal_login_login_get_message();
+    $message_output = theme('modal_login_login_message', array('message' => $message));
+    $commands[] = ajax_command_html('#login_message_wrapper', $message_output);
+    //Redirect to referring link
+  }
+  return array('#type' => 'ajax', '#commands' => $commands);
+}
+
+function modal_login_login_theme_registry_alter(&$theme_registry) {
+  $mod_path = drupal_get_path('module', 'modal_login_login');
+  $theme_registry_copy = $theme_registry;       // munge on a copy
+  _theme_process_registry($theme_registry_copy, 'phptemplate', 'theme_engine', 'pow', $mod_path);
+  $theme_registry += array_diff_key($theme_registry_copy, $theme_registry);
+  $hooks = array('node');
+  foreach ($hooks as $h) {
+    _modal_login_login_insert_after_first_element($theme_registry[$h]['theme paths'], $mod_path);
+  }
+}
+
+/**
+ * Implements hook_page_alter()
+ */
+function modal_login_login_page_alter(&$page) {
+  //Add jquery ui dialog
+  drupal_add_library('system', 'ui.dialog');
+  $page['page_bottom']['modal_login'] = array(
+    '#type' => 'markup',
+    '#markup' => render(drupal_get_form('modal_login_login_form')),
+  );
+}
+
+/**
+ *  Renders login message
+ */
+function theme_modal_login_login_message($msg) {
+  //Currently doesn't do any advanced theming
+  return theme('item_list', array('items' => $msg['message']));
+}
+
+/**
+ * Fetchs message
+ * Basicall a ripoff of drupal_get_messages :)
+ */
+function modal_login_login_get_message($clear_queue = TRUE) {
+  $message = isset($_SESSION[MODAL_LOGIN_VAR]) ? $_SESSION[MODAL_LOGIN_VAR] : NULL;
+  if($message) {
+    if ($clear_queue) {
+      unset($_SESSION[MODAL_LOGIN_VAR]);
+    }
+    return $message;
+  }
+  return array();
+}
+
+/**
+ * Used to set the custom validation message
+ */
+function modal_login_login_set_message($message) {
+  $_SESSION[MODAL_LOGIN_VAR] = $message;
+}
+
+
+/**
+ * Helper function for re-ordering arrays (needed by theme_registry_alter)
+**/
+function _modal_login_login_insert_after_first_element(&$a, $element) {
+  if(is_array($a)) {
+    $first_element = array_shift($a);
+    array_unshift($a, $first_element, $element);
+  }
+}
